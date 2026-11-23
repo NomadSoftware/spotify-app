@@ -1,5 +1,5 @@
 import { API_BASE } from './config';
-import { getAccessToken } from './auth';
+import { getAccessToken, refreshAccessToken } from './auth';
 
 export interface ApiOptions {
   method?: string;
@@ -37,13 +37,14 @@ export async function api<T = undefined>(path: string, opts: ApiOptions = {}): P
     const res = await rawApi(path, opts);
 
     if (res.status === 401 && attempt === 1) {
-      // Access token was revoked/expired beyond our refresh margin: force a
-      // refresh (throws if the session is unrecoverable) and retry once.
-      await getAccessToken();
+      // Token rejected despite a locally-valid expiry (server-side revocation,
+      // clock skew): unconditionally refresh and retry once.
+      await refreshAccessToken();
       continue;
     }
     if (res.status === 429 && attempt <= 3) {
-      const retryAfter = Math.min(Number(res.headers.get('Retry-After') ?? '2'), 60);
+      const parsed = Number(res.headers.get('Retry-After') ?? '2');
+      const retryAfter = Number.isFinite(parsed) ? Math.min(parsed, 60) : 2;
       await new Promise((r) => setTimeout(r, (retryAfter + 1) * 1000));
       continue;
     }
@@ -58,7 +59,14 @@ export async function api<T = undefined>(path: string, opts: ApiOptions = {}): P
       }
       throw new SpotifyApiError(res.status, message);
     }
-    return (await res.json()) as T;
+    // Write endpoints (e.g. /me/library) return 200 with an empty body.
+    const text = await res.text();
+    if (!text) return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new SpotifyApiError(res.status, `Unexpected non-JSON response: ${text.slice(0, 120)}`);
+    }
   }
 }
 
@@ -66,9 +74,13 @@ export async function api<T = undefined>(path: string, opts: ApiOptions = {}): P
 export async function paged<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T[]> {
   const out: T[] = [];
   let offset = 0;
-  const limit = (params.limit as number | undefined) ?? 50;
+  const limit = typeof params.limit === 'number' ? params.limit : 50;
   for (;;) {
     const page = await api<{ total: number; items: T[] }>(path, { params: { ...params, limit, offset } });
+    if (!page || !Array.isArray(page.items)) {
+      // A 204-shaped body would otherwise crash on `.items` below.
+      throw new SpotifyApiError(200, `Unexpected empty response shape from ${path}`);
+    }
     out.push(...page.items);
     if (page.items.length === 0 || out.length >= page.total) return out;
     offset += page.items.length;

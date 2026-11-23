@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getOrCreatePlaylist, replacePlaylistItems } from '../lib/playlist';
-import { loadHistory, recentTrackIds } from '../lib/history';
+import { lastPlayedMap, loadHistory, recentTrackIds } from '../lib/history';
+import { randomSample, selectNeglectFirst } from '../lib/util';
 import { getLikedTracks } from '../lib/likedCache';
 import type { LikedTrack, PlayEntry } from '../lib/types';
 
@@ -10,6 +11,7 @@ interface Settings {
   name: string;
   size: number;
   windowDays: number;
+  neglectFirst: boolean;
   autoRefresh: boolean;
   lastRefreshTs: number;
 }
@@ -18,15 +20,33 @@ const DEFAULTS: Settings = {
   name: 'Not Recently Played',
   size: 50,
   windowDays: 7,
+  neglectFirst: true,
   autoRefresh: true,
   lastRefreshTs: 0,
 };
 
+function clampNumber(v: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) } : DEFAULTS;
-  } catch {
+    const parsed = raw ? (JSON.parse(raw) as Partial<Settings>) : {};
+    // Clamp/validate: a stale or hand-edited blob must not feed bad values
+    // into the sliders or the selection logic.
+    return {
+      name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name : DEFAULTS.name,
+      size: clampNumber(parsed.size, 10, 200, DEFAULTS.size),
+      windowDays: clampNumber(parsed.windowDays, 1, 30, DEFAULTS.windowDays),
+      neglectFirst: typeof parsed.neglectFirst === 'boolean' ? parsed.neglectFirst : DEFAULTS.neglectFirst,
+      autoRefresh: typeof parsed.autoRefresh === 'boolean' ? parsed.autoRefresh : DEFAULTS.autoRefresh,
+      lastRefreshTs: clampNumber(parsed.lastRefreshTs, 0, Number.MAX_SAFE_INTEGER, 0),
+    };
+  } catch (err) {
+    console.error('[settings] failed to parse stored settings — using defaults', err);
     return DEFAULTS;
   }
 }
@@ -40,12 +60,19 @@ export default function PlaylistMaintainer() {
   const [error, setError] = useState<string | null>(null);
   const [playlistUrl, setPlaylistUrl] = useState<string | null>(null);
 
+  // Persist settings in an effect, not inside the state updater: updaters
+  // must stay pure (StrictMode double-invokes them, and a quota throw there
+  // would crash the React tree).
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch (err) {
+      console.error('[settings] persist failed', err);
+    }
+  }, [settings]);
+
   const update = (patch: Partial<Settings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch };
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-      return next;
-    });
+    setSettings((prev) => ({ ...prev, ...patch }));
   };
 
   useEffect(() => {
@@ -67,21 +94,33 @@ export default function PlaylistMaintainer() {
         settings.name,
         'Kept fresh by Spotify Personal Tools — songs I have not heard recently.',
       );
-      const pool = candidates.slice();
-      // Fisher-Yates so repeated refreshes give a different selection.
-      for (let i = pool.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pool[i], pool[j]] = [pool[j], pool[i]];
+      // Fresh history at refresh time, not the mount-time snapshot.
+      const historyNow = loadHistory();
+      const lastPlayed = lastPlayedMap(historyNow);
+      const recent = recentTrackIds(historyNow, windowMs);
+      const pool = (liked ?? []).filter((t) => !recent.has(t.id));
+
+      let picked: LikedTrack[];
+      let fromNeglect = 0;
+      if (settings.neglectFirst) {
+        const result = selectNeglectFirst(pool, lastPlayed, settings.size);
+        picked = result.picked;
+        fromNeglect = result.fromNeglect;
+      } else {
+        picked = randomSample(pool, settings.size);
       }
-      const picked = pool.slice(0, settings.size);
       await replacePlaylistItems(playlist.id, picked.map((t) => t.uri));
       update({ lastRefreshTs: Date.now() });
       setPlaylistUrl(playlist.url);
-      setStatus(
-        picked.length > 0
-          ? `Playlist "${playlist.name}" updated with ${picked.length} song(s) not played in the last ${settings.windowDays} day(s).`
-          : 'No candidates available — every liked song was played within the window.',
-      );
+      if (picked.length === 0) {
+        setStatus('No candidates available — every liked song was played within the window.');
+      } else if (settings.neglectFirst) {
+        setStatus(
+          `Playlist "${playlist.name}" updated with ${picked.length} song(s) — ${fromNeglect} from your least-heard pool, ${picked.length - fromNeglect} from the rest.`,
+        );
+      } else {
+        setStatus(`Playlist "${playlist.name}" updated with ${picked.length} random song(s) not played in the last ${settings.windowDays} day(s).`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -143,12 +182,27 @@ export default function PlaylistMaintainer() {
         <label className="checkbox">
           <input
             type="checkbox"
+            checked={settings.neglectFirst}
+            onChange={(e) => update({ neglectFirst: e.target.checked })}
+          />
+          Neglect-first: half the playlist from your 100 least-heard songs
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
             checked={settings.autoRefresh}
             onChange={(e) => update({ autoRefresh: e.target.checked })}
           />
           Auto-refresh when opening the app (if older than 12h)
         </label>
       </div>
+      {settings.neglectFirst && (
+        <p className="muted hint">
+          "Least heard" = never recorded in your local history first (oldest likes first), then
+          tracks whose last recorded play is oldest. With little history so far this favors your
+          oldest likes; it sharpens as coverage grows.
+        </p>
+      )}
 
       <div className="stats">
         <Stat label="Liked songs" value={liked?.length ?? '…'} />

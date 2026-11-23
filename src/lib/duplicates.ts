@@ -13,7 +13,7 @@ import type { DupPair, LikedTrack } from './types';
 const RE_BRACKETS = /[([{][^)\]}]*[)\]}]/g;
 // Words that mark an edition/version suffix rather than part of the title.
 const RE_EDITION_WORD =
-  /\b(remaster|remastered|anniversary|deluxe|expanded|bonus|mono|stereo|remix|remixed|edit|single|version|version|live|acoustic|instrumental|radio|extended|high|resolution)\b/;
+  /\b(remaster|remastered|anniversary|deluxe|expanded|bonus|mono|stereo|remix|remixed|edit|single|version|live|acoustic|instrumental|radio|extended|high|resolution)\b/;
 
 export function normalizeName(raw: string): string {
   let s = raw.toLowerCase();
@@ -101,9 +101,13 @@ export function findDuplicatePairs(
 ): { near: DupPair[]; weak: DupPair[] } {
   const tolerance = opts.durationToleranceMs ?? 5000;
 
+  // A name that normalizes to empty carries no song identity — exclude such
+  // tracks up front so they can't form false groups in either tier.
+  const usable = tracks.filter((t) => normalizeName(t.name) !== '');
+
   // Tier 1: same song + same primary artist.
   const near: DupPair[] = [];
-  for (const group of groupBy(tracks, (t) => `${normalizeName(t.name)}||${normalizeArtist(t.artist)}`)) {
+  for (const group of groupBy(usable, (t) => `${normalizeName(t.name)}||${normalizeArtist(t.artist)}`)) {
     if (group.tracks.length < 2) continue;
     near.push(...pairsWithin(group.tracks, 'near', tolerance));
   }
@@ -112,7 +116,7 @@ export function findDuplicatePairs(
   // primary artist — catches "Various Artists" compilations. Scans all tracks
   // so a track already paired in tier 1 can still pair up across artists here.
   const weak: DupPair[] = [];
-  for (const group of groupBy(tracks, (t) => normalizeName(t.name))) {
+  for (const group of groupBy(usable, (t) => normalizeName(t.name))) {
     if (group.tracks.length < 2) continue;
     for (const pair of pairsWithin(group.tracks, 'weak', tolerance)) {
       if (normalizeArtist(pair.a.artist) !== normalizeArtist(pair.b.artist)) weak.push(pair);

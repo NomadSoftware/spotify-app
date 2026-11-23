@@ -18,7 +18,9 @@ export default function DuplicateFinder() {
   const [toleranceSec, setToleranceSec] = useState(5);
   const [includeWeak, setIncludeWeak] = useState(false);
   const [deletedCount, setDeletedCount] = useState(0);
-  const decidedRef = useRef(new Set<string>());
+  // Decided pair signatures must be state (not a ref): the queue memo only
+  // recomputes when its dependencies change, and "Keep both" makes no API call.
+  const [decided, setDecided] = useState<Set<string>>(new Set());
   const undoRef = useRef<{ track: LikedTrack; signature: string }[]>([]);
   const [undoCount, setUndoCount] = useState(0);
 
@@ -28,7 +30,7 @@ export default function DuplicateFinder() {
     setStatus(null);
     try {
       const cache = await getLikedTracks(force);
-      decidedRef.current = new Set();
+      setDecided(new Set());
       undoRef.current = [];
       setUndoCount(0);
       setTracks(cache.tracks);
@@ -51,8 +53,8 @@ export default function DuplicateFinder() {
   );
   const queue = useMemo(() => {
     const base = includeWeak ? [...near, ...weak] : near;
-    return base.filter((p) => !decidedRef.current.has(pairSignature(p)));
-  }, [near, weak, includeWeak]);
+    return base.filter((p) => !decided.has(pairSignature(p)));
+  }, [near, weak, includeWeak, decided]);
   const pair: DupPair | undefined = queue[0];
 
   const applyDecision = async (toDelete: LikedTrack[], message: string) => {
@@ -66,12 +68,10 @@ export default function DuplicateFinder() {
         for (const t of toDelete) removeFromCache(t);
         if (tracks) setTracks(tracks.filter((t) => !toDelete.some((d) => d.id === t.id)));
         setDeletedCount((n) => n + toDelete.length);
-        undoRef.current.push(
-          ...toDelete.map((t) => ({ track: t, signature })),
-        );
+        undoRef.current.push(...toDelete.map((t) => ({ track: t, signature })));
         setUndoCount(undoRef.current.length);
       }
-      decidedRef.current.add(signature);
+      setDecided((prev) => new Set(prev).add(signature));
       setStatus(message);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -81,15 +81,22 @@ export default function DuplicateFinder() {
   };
 
   const undoLast = async () => {
-    const last = undoRef.current.pop();
+    // Peek, don't pop: the restore record is only removed once the re-like
+    // actually succeeded, so a failed undo stays retryable.
+    const last = undoRef.current[undoRef.current.length - 1];
     if (!last) return;
     setBusy(true);
     setError(null);
     try {
       await likeTracks([last.track.uri]);
+      undoRef.current.pop();
       addToCache(last.track);
       setTracks((prev) => (prev ? [...prev, last.track] : prev));
-      decidedRef.current.delete(last.signature);
+      setDecided((prev) => {
+        const next = new Set(prev);
+        next.delete(last.signature);
+        return next;
+      });
       setDeletedCount((n) => Math.max(0, n - 1));
       setStatus(`Restored "${last.track.name}" (${last.track.album}).`);
     } catch (err) {
@@ -145,7 +152,7 @@ export default function DuplicateFinder() {
 
       <p className="muted">
         <strong>{queue.length}</strong> pair(s) to review
-        {deletedCount > 0 && <> · {deletedCount} track(s) removed this session</>}
+        {deletedCount > 0 && <> · {deletedCount} track(s) unliked this session</>}
       </p>
 
       {error && <p className="error">{error}</p>}
@@ -175,31 +182,32 @@ export default function DuplicateFinder() {
             <button
               className="btn btn-danger"
               disabled={busy}
-              onClick={() => void applyDecision([pair.a], `Removed "${pair.a.name}" (${pair.a.album}).`)}
+              onClick={() => void applyDecision([pair.a], `Unliked "${pair.a.name}" (${pair.a.album}).`)}
             >
-              Delete A
+              Unlike A
             </button>
             <button
               className="btn btn-danger"
               disabled={busy}
-              onClick={() => void applyDecision([pair.b], `Removed "${pair.b.name}" (${pair.b.album}).`)}
+              onClick={() => void applyDecision([pair.b], `Unliked "${pair.b.name}" (${pair.b.album}).`)}
             >
-              Delete B
+              Unlike B
             </button>
             <button
               className="btn btn-danger"
               disabled={busy}
-              onClick={() => void applyDecision([pair.a, pair.b], 'Removed both versions.')}
+              onClick={() => void applyDecision([pair.a, pair.b], 'Unliked both versions.')}
             >
-              Delete both
+              Unlike both
             </button>
             <button className="btn btn-ghost" disabled={busy} onClick={() => void applyDecision([], 'Kept both.')}>
               Keep both →
             </button>
           </div>
           <p className="muted hint">
-            Deletions can be undone in this session (Undo re-likes the track, but Spotify won't
-            restore the original "added" date). A is the older release, B the newer.
+            Unlikes can be undone in this session (Undo re-likes the track, but Spotify won't
+            restore the original liked date). A is the older release; ties go by album name, then
+            by which you liked earlier — B is the other.
           </p>
         </>
       )}

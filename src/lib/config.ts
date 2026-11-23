@@ -4,7 +4,7 @@ export const AUTHORIZE_URL = 'https://accounts.spotify.com/authorize';
 export const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 export const API_BASE = 'https://api.spotify.com/v1';
 
-// Scopes: read liked songs, unlike/unlike via /me/library, manage private
+// Scopes: read liked songs, unlike/re-like via /me/library, manage private
 // playlists, read play history. No playback, so no streaming scopes.
 export const SCOPES = [
   'user-library-read',

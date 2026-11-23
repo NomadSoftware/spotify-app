@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { beginLogin, handleCallbackIfPresent, hasClientId, logout } from './lib/auth';
+import { useCallback, useEffect, useState } from 'react';
+import { beginLogin, handleCallbackIfPresent, hasClientId, logout, NotAuthenticatedError } from './lib/auth';
 import { fetchProfile } from './lib/tracks';
+import { startHistoryPolling } from './lib/history';
 import { isLocalhost } from './lib/config';
 import type { SpotifyProfile } from './lib/types';
 import DuplicateFinder from './components/DuplicateFinder';
@@ -15,34 +16,58 @@ export default function App() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [profile, setProfile] = useState<SpotifyProfile | null>(null);
   const [tab, setTab] = useState<Tab>('duplicates');
+  const [pollError, setPollError] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      if (!hasClientId()) {
-        setFatal(
-          'VITE_SPOTIFY_CLIENT_ID is missing. Copy .env.local.example to .env.local, add your Client ID from the Spotify dashboard, and restart the dev server.',
-        );
+  // Startup check, callable again from the UI: a transient failure (offline,
+  // 5xx) is NOT the same as being logged out — only NotAuthenticatedError
+  // sends the user to the login screen.
+  const init = useCallback(async () => {
+    setFatal(null);
+    setPhase('checking');
+    if (!hasClientId()) {
+      setFatal(
+        'VITE_SPOTIFY_CLIENT_ID is missing. Copy .env.local.example to .env.local, add your Client ID from the Spotify dashboard, and restart the dev server.',
+      );
+      setPhase('login');
+      return;
+    }
+    try {
+      await handleCallbackIfPresent();
+      await fetchProfile();
+      setPhase('ready');
+    } catch (err) {
+      if (err instanceof NotAuthenticatedError) {
         setPhase('login');
-        return;
+      } else {
+        setFatal(err instanceof Error ? err.message : String(err));
+        setPhase('login');
       }
-      try {
-        await handleCallbackIfPresent();
-        await fetchProfile();
-        setPhase('ready');
-      } catch (err) {
-        if (err instanceof Error && err.message === 'Not logged in.') {
-          setPhase('login');
-        } else {
-          setFatal(err instanceof Error ? err.message : String(err));
-          setPhase('login');
-        }
-      }
-    })();
+    }
   }, []);
 
   useEffect(() => {
+    void init();
+  }, [init]);
+
+  useEffect(() => {
     if (phase !== 'ready') return;
-    fetchProfile().then(setProfile).catch(() => setProfile(null));
+    fetchProfile()
+      .then(setProfile)
+      .catch((err) => {
+        console.error('[app] profile load failed — header name hidden', err);
+        setProfile(null);
+      });
+  }, [phase]);
+
+  // History accumulation runs at app level, on every tab — not just while the
+  // history view is mounted. Failures surface as a banner (a dead session
+  // would otherwise silently stop history recording forever).
+  useEffect(() => {
+    if (phase !== 'ready') return;
+    return startHistoryPolling(
+      () => setPollError(null),
+      (err) => setPollError(`Play-history sync failed: ${err.message} — history is not being recorded.`),
+    );
   }, [phase]);
 
   if (phase !== 'ready') {
@@ -53,9 +78,14 @@ export default function App() {
           {fatal ? (
             <>
               <p className="error">{fatal}</p>
-              <button className="btn" onClick={() => beginLogin().catch((e) => setFatal(e.message))}>
-                Retry login
-              </button>
+              <div className="row gap center">
+                <button className="btn" onClick={() => void init()}>
+                  Try again
+                </button>
+                <button className="btn btn-ghost" onClick={() => beginLogin().catch((e) => setFatal(e.message))}>
+                  Log in with Spotify
+                </button>
+              </div>
             </>
           ) : phase === 'checking' ? (
             <p className="muted">Checking session…</p>
@@ -114,6 +144,11 @@ export default function App() {
         <p className="warning">
           You opened this app via <code>localhost</code>. Spotify requires <code>127.0.0.1</code> —
           open <a href="http://127.0.0.1:5173/">http://127.0.0.1:5173/</a> instead.
+        </p>
+      )}
+      {pollError && (
+        <p className="warning">
+          ⚠ {pollError} If this persists, log out and back in.
         </p>
       )}
       <main className="content">

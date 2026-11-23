@@ -46,8 +46,10 @@ Open **http://127.0.0.1:5173** (Spotify deprecated `localhost` redirect URIs) an
 
 ## How it works
 
-- **Auth**: PKCE flow — no client secret, tokens in `localStorage`, auto-refresh,
-  401/429 handling with `Retry-After` backoff.
+- **Auth**: PKCE flow — no client secret, tokens in `localStorage`, auto-refresh
+  with 401 force-refresh and 429 `Retry-After` backoff. Requests scopes:
+  `user-library-read`, `user-library-modify` (unlike/re-like),
+  `playlist-modify-private`, `user-read-recently-played` — nothing for playback.
 - **Duplicates**: track names are normalized (edition markers like
   "2011 Remaster", "(Deluxe)", "Mono" are stripped; accent-insensitive), grouped
   by normalized name + artist, and pairs within a configurable duration tolerance
@@ -63,8 +65,11 @@ Open **http://127.0.0.1:5173** (Spotify deprecated `localhost` redirect URIs) an
   History tab shows your coverage window honestly.
 - **Playlist**: candidates = liked songs − tracks played within the window; a
   random sample fills the playlist via `POST /me/playlists` (created once) and
-  `PUT /playlists/{id}/items` (replaces ≤100 URIs per call). Auto-refresh on open
-  when older than 12h, or "Refresh playlist now" any time.
+  `PUT /playlists/{id}/items` (replaces ≤100 URIs per call). With
+  **neglect-first** enabled (default), half the playlist comes from the 100
+  least-heard candidates — never-recorded-in-history first (oldest likes
+  first), then oldest last-played — and the rest from the balance.
+  Auto-refresh on open when older than 12h, or "Refresh playlist now" any time.
 
 ## Feb 2026 API notes
 

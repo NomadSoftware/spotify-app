@@ -28,3 +28,13 @@ export function recentTrackIds(entries: PlayEntry[], windowMs: number, now = Dat
   }
   return ids;
 }
+
+/** trackId → most recent recorded play (ISO). Tracks with no recorded plays are absent. */
+export function lastPlayedMap(entries: PlayEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const e of entries) {
+    const prev = map.get(e.trackId);
+    if (!prev || e.playedAt > prev) map.set(e.trackId, e.playedAt);
+  }
+  return map;
+}
