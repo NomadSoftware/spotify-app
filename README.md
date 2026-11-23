@@ -50,7 +50,7 @@ Open **http://127.0.0.1:5173** (Spotify deprecated `localhost` redirect URIs) an
 Deployment target is Cloudflare Workers static assets (`wrangler.jsonc`, with
 `not_found_handling: "single-page-application"` so Spotify's `/callback`
 redirect serves the app). First deploy: `npx wrangler login`, then
-`npm run deploy` → live at `https://spotify-personal-tools.<account>.workers.dev`.
+`npm run deploy` → live at `https://spotify-app.<account>.workers.dev`.
 Bind a custom subdomain in the Cloudflare dashboard if you prefer.
 
 For any non-local origin you must also register its redirect URI
