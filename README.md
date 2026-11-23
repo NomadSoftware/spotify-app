@@ -40,9 +40,25 @@ Authorization Code + PKCE.
    npm run dev        # http://127.0.0.1:5173 (use 127.0.0.1, not localhost)
    npm test           # unit tests for the pure logic
    npm run build      # typecheck + static build in dist/
+   npm run deploy     # build + deploy dist/ to Cloudflare Workers (wrangler)
    ```
 
 Open **http://127.0.0.1:5173** (Spotify deprecated `localhost` redirect URIs) and log in.
+
+## Deploying
+
+Deployment target is Cloudflare Workers static assets (`wrangler.jsonc`, with
+`not_found_handling: "single-page-application"` so Spotify's `/callback`
+redirect serves the app). First deploy: `npx wrangler login`, then
+`npm run deploy` → live at `https://spotify-personal-tools.<account>.workers.dev`.
+Bind a custom subdomain in the Cloudflare dashboard if you prefer.
+
+For any non-local origin you must also register its redirect URI
+(`https://<host>/callback`) in the
+[Spotify dashboard](https://developer.spotify.com/dashboard) — the app derives
+the redirect from wherever it's served, and Spotify requires an exact match.
+`VITE_SPOTIFY_CLIENT_ID` is inlined at build time, so set it in the deploy
+environment when building outside this machine.
 
 ## How it works
 
