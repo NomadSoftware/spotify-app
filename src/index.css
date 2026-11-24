@@ -346,6 +346,48 @@ code {
   white-space: nowrap;
 }
 
+/* playlist chooser (no single playlist could be resolved) */
+
+.setup-panel {
+  background: var(--bg);
+  border: 1px solid var(--card-edge);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 16px 0 4px;
+}
+
+.setup-panel h3 {
+  margin: 0 0 6px;
+}
+
+.candidate-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 16px;
+}
+
+.candidate-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--card-edge);
+}
+
+.paste-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.paste-form input {
+  flex: 1;
+  min-width: 240px;
+}
+
 input[type='range'] {
   accent-color: var(--accent);
   width: 160px;

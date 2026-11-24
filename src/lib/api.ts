@@ -81,8 +81,18 @@ export async function paged<T>(path: string, params: Record<string, string | num
       // A 204-shaped body would otherwise crash on `.items` below.
       throw new SpotifyApiError(200, `Unexpected empty response shape from ${path}`);
     }
+    // `total` can count entries the listing withholds (e.g. private
+    // playlists), which leaves `out` short of it and makes the walk ask for
+    // one more page — which hands back the last item again. Stop on that.
+    if (page.items.length > 0 && out.length > 0 && sameItem(page.items[0], out[out.length - 1])) {
+      return out;
+    }
     out.push(...page.items);
     if (page.items.length === 0 || out.length >= page.total) return out;
     offset += page.items.length;
   }
+}
+
+function sameItem(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }

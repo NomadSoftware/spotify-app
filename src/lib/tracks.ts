@@ -68,9 +68,3 @@ export async function fetchRecentlyPlayed(params: { limit?: number; before?: num
 export async function fetchProfile(): Promise<SpotifyProfile> {
   return api('/me');
 }
-
-export async function fetchPlaylistMeta(
-  id: string,
-): Promise<{ id: string; name: string; owner: { id: string }; external_urls: { spotify: string } }> {
-  return api(`/playlists/${id}`);
-}

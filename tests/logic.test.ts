@@ -3,6 +3,12 @@ import { normalizeName, normalizeArtist, findDuplicatePairs } from '../src/lib/d
 import { mergePlays, recentTrackIds, playKey, lastPlayedMap, MAX_ENTRIES } from '../src/lib/historyCore.ts';
 import { chunk, randomSample, orderByNeglect, selectNeglectFirst } from '../src/lib/util.ts';
 import { mapSavedTrack, type SavedTrackPageItem } from '../src/lib/mapping.ts';
+import {
+  decidePlaylist,
+  parsePlaylistRef,
+  MANAGED_DESCRIPTION,
+  type PlaylistCandidate,
+} from '../src/lib/playlistCore.ts';
 import type { LikedTrack } from '../src/lib/types.ts';
 
 let passed = 0;
@@ -354,6 +360,87 @@ test('mapSavedTrack takes the largest image and trims the release year', () => {
   assert.ok(t);
   assert.equal(t.imageUrl, 'big');
   assert.equal(t.releaseYear, '1999');
+});
+
+// ---- playlist link parsing ----
+
+test('parsePlaylistRef accepts links, share links, URIs and bare ids', () => {
+  const id = '7DXw12o5mskRLlc3HbGKEa';
+  assert.equal(parsePlaylistRef(`https://open.spotify.com/playlist/${id}`), id);
+  assert.equal(parsePlaylistRef(`https://open.spotify.com/playlist/${id}?si=abc123`), id);
+  assert.equal(parsePlaylistRef(`  https://open.spotify.com/intl-de/playlist/${id}?utm_source=copy  `), id);
+  assert.equal(parsePlaylistRef(`open.spotify.com/playlist/${id}`), id);
+  assert.equal(parsePlaylistRef(`spotify:playlist:${id}`), id);
+  assert.equal(parsePlaylistRef(id), id);
+});
+
+test('parsePlaylistRef rejects anything that is not a playlist reference', () => {
+  assert.equal(parsePlaylistRef(''), null);
+  assert.equal(parsePlaylistRef('   '), null);
+  assert.equal(parsePlaylistRef('https://open.spotify.com/album/' + '7DXw12o5mskRLlc3HbGKEa'), null);
+  assert.equal(parsePlaylistRef('spotify:album:7DXw12o5mskRLlc3HbGKEa'), null);
+  assert.equal(parsePlaylistRef('not a link'), null);
+  assert.equal(parsePlaylistRef('https://example.com/no-playlist-here'), null);
+});
+
+// ---- which playlist to manage ----
+
+const NAME = 'Not Recently Played';
+const ME = 'user-me';
+
+function playlist(id: string, overrides: Partial<PlaylistCandidate> = {}): PlaylistCandidate {
+  return {
+    id,
+    name: NAME,
+    description: MANAGED_DESCRIPTION,
+    ownerId: ME,
+    url: `https://open.spotify.com/playlist/${id}`,
+    trackTotal: 50,
+    ...overrides,
+  };
+}
+
+test('a single playlist this app created is adopted', () => {
+  const r = decidePlaylist([playlist('a'), playlist('b', { name: 'Roadtrip' })], NAME, ME);
+  assert.equal(r.kind, 'resolved');
+  assert.ok(r.kind === 'resolved');
+  assert.equal(r.playlist.id, 'a');
+});
+
+test('the same playlist found by two sources counts once', () => {
+  const r = decidePlaylist([playlist('a'), playlist('a')], NAME, ME);
+  assert.equal(r.kind, 'resolved');
+});
+
+test('several app-created playlists with the name: ask, never guess', () => {
+  const r = decidePlaylist([playlist('a'), playlist('b'), playlist('c')], NAME, ME);
+  assert.ok(r.kind === 'ambiguous');
+  assert.deepEqual(r.candidates.map((c) => c.id).sort(), ['a', 'b', 'c']);
+});
+
+test('a playlist the app did not create is never adopted on its own', () => {
+  const r = decidePlaylist([playlist('mine', { description: 'hand-made' })], NAME, ME);
+  assert.ok(r.kind === 'unmanaged');
+  assert.equal(r.candidates[0].id, 'mine');
+});
+
+test("another account's playlist or another name is ignored", () => {
+  const r = decidePlaylist(
+    [playlist('theirs', { ownerId: 'someone-else' }), playlist('other', { name: NAME + ' 2' })],
+    NAME,
+    ME,
+  );
+  assert.equal(r.kind, 'none');
+});
+
+test('an app-created match wins over unrelated same-name playlists', () => {
+  const r = decidePlaylist([playlist('handmade', { description: '' }), playlist('app')], NAME, ME);
+  assert.ok(r.kind === 'resolved');
+  assert.equal(r.playlist.id, 'app');
+});
+
+test('nothing matches', () => {
+  assert.equal(decidePlaylist([], NAME, ME).kind, 'none');
 });
 
 console.log(`\n${passed} tests passed`);

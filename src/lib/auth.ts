@@ -1,4 +1,5 @@
 import { AUTHORIZE_URL, CLIENT_ID, SCOPES, TOKEN_URL, redirectUri } from './config';
+import { PLAYLIST_REGISTRY_KEY } from './playlistCore';
 import type { TokenSet } from './types';
 
 const TOKEN_KEY = 'sp.token';
@@ -89,9 +90,11 @@ function writeToken(t: TokenSet): void {
 
 export function logout(): void {
   // Remove every per-user artifact — a second account must not inherit this
-  // account's library cache, history, names, or managed-playlist link.
+  // account's library cache, history, or names. The managed-playlist registry
+  // stays: it is keyed by Spotify user, so no other account can pick it up,
+  // and forgetting it is what made the app create duplicate playlists.
   for (const key of Object.keys(localStorage)) {
-    if (key.startsWith('sp.')) localStorage.removeItem(key);
+    if (key.startsWith('sp.') && key !== PLAYLIST_REGISTRY_KEY) localStorage.removeItem(key);
   }
 }
 

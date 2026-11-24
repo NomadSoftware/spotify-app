@@ -79,13 +79,23 @@ environment when building outside this machine.
   localStorage (deduped, newest first, capped at 15 000 entries). Gaps accumulate
   while the tab is closed — plays older than ~24h can't be backfilled, so the
   History tab shows your coverage window honestly.
-- **Playlist**: candidates = liked songs − tracks played within the window; a
-  random sample fills the playlist via `POST /me/playlists` (created once) and
-  `PUT /playlists/{id}/items` (replaces ≤100 URIs per call). With
-  **neglect-first** enabled (default), half the playlist comes from the 100
-  least-heard candidates — never-recorded-in-history first (oldest likes
-  first), then oldest last-played — and the rest from the balance.
+- **Playlist**: candidates = liked songs − tracks played within the window;
+  `PUT /playlists/{id}/items` replaces the playlist's contents (≤100 URIs per
+  call). With **neglect-first** enabled (default), half the playlist comes from
+  the 100 least-heard candidates — never-recorded-in-history first (oldest
+  likes first), then oldest last-played — and the rest from the balance.
   Auto-refresh on open when older than 12h, or "Refresh playlist now" any time.
+- **Which playlist gets updated**: the app finds its playlist by name. It
+  looks for a playlist you own that has the configured name *and* the
+  description the app writes, through `GET /search` and `GET /me/playlists`.
+  Exactly one match is used; otherwise you're asked to pick one, paste a
+  Spotify link, or create a new one. (Spotify's playlist listing has been
+  observed to omit app-created playlists entirely, and search only covers
+  public playlists, so neither alone is trusted to find it.)
+  The app never creates a playlist on its own. It remembers the id it resolved
+  (per Spotify user, in localStorage `sp.playlistIds`, kept across logout) so
+  later refreshes don't depend on search, and keeps working if the playlist is
+  renamed or made private.
 
 ## Feb 2026 API notes
 

@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { getOrCreatePlaylist, replacePlaylistItems } from '../lib/playlist';
+import {
+  adoptManagedPlaylist,
+  createManagedPlaylist,
+  replacePlaylistItems,
+  resolveManagedPlaylist,
+} from '../lib/playlist';
+import type { PlaylistCandidate, Resolution, UnresolvedReason } from '../lib/playlistCore';
 import { lastPlayedMap, loadHistory, recentTrackIds } from '../lib/history';
 import { randomSample, selectNeglectFirst } from '../lib/util';
 import { getLikedTracks } from '../lib/likedCache';
@@ -14,6 +20,12 @@ interface Settings {
   neglectFirst: boolean;
   autoRefresh: boolean;
   lastRefreshTs: number;
+}
+
+/** Set when looking for the playlist didn't settle on exactly one. */
+interface Unresolved {
+  reason: UnresolvedReason;
+  candidates: PlaylistCandidate[];
 }
 
 const DEFAULTS: Settings = {
@@ -59,6 +71,11 @@ export default function PlaylistMaintainer() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playlistUrl, setPlaylistUrl] = useState<string | null>(null);
+  // A playlist only becomes "resolved" by being found or explicitly chosen.
+  // Looking for it never creates one — that used to produce a new playlist
+  // every time the stored id was missing.
+  const [resolved, setResolved] = useState(false);
+  const [unresolved, setUnresolved] = useState<Unresolved | null>(null);
 
   // Persist settings in an effect, not inside the state updater: updaters
   // must stay pure (StrictMode double-invokes them, and a quota throw there
@@ -75,6 +92,37 @@ export default function PlaylistMaintainer() {
     setSettings((prev) => ({ ...prev, ...patch }));
   };
 
+  const applyResolution = (r: Resolution): void => {
+    if (r.kind === 'resolved') {
+      setUnresolved(null);
+      setPlaylistUrl(r.playlist.url);
+      setResolved(true);
+      return;
+    }
+    setResolved(false);
+    setUnresolved({ reason: r.kind, candidates: 'candidates' in r ? r.candidates : [] });
+  };
+
+  // Find the playlist by name before anything else.
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    resolveManagedPlaylist(settings.name)
+      .then((r) => {
+        if (!cancelled) applyResolution(r);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     void getLikedTracks(false)
       .then((c) => setLiked(c.tracks))
@@ -90,10 +138,12 @@ export default function PlaylistMaintainer() {
     setError(null);
     setStatus(null);
     try {
-      const playlist = await getOrCreatePlaylist(
-        settings.name,
-        'Kept fresh by Spotify Personal Tools — songs I have not heard recently.',
-      );
+      const r = await resolveManagedPlaylist(settings.name);
+      if (r.kind !== 'resolved') {
+        applyResolution(r); // asks the user which playlist to use
+        return;
+      }
+      const playlist = r.playlist;
       // Fresh history at refresh time, not the mount-time snapshot.
       const historyNow = loadHistory();
       const lastPlayed = lastPlayedMap(historyNow);
@@ -112,6 +162,8 @@ export default function PlaylistMaintainer() {
       await replacePlaylistItems(playlist.id, picked.map((t) => t.uri));
       update({ lastRefreshTs: Date.now() });
       setPlaylistUrl(playlist.url);
+      setResolved(true);
+      setUnresolved(null);
       if (picked.length === 0) {
         setStatus('No candidates available — every liked song was played within the window.');
       } else if (settings.neglectFirst) {
@@ -128,14 +180,56 @@ export default function PlaylistMaintainer() {
     }
   };
 
-  // Auto-refresh on open when the playlist went stale (checked once per mount).
+  // Auto-refresh once the playlist is resolved and went stale (12h). Also
+  // fires when a playlist is chosen or created, unless this browser refreshed
+  // recently — so a new playlist gets filled straight away.
   useEffect(() => {
     const staleMs = 12 * 60 * 60_000;
-    if (settings.autoRefresh && Date.now() - settings.lastRefreshTs > staleMs && liked && !busy) {
+    if (resolved && settings.autoRefresh && Date.now() - settings.lastRefreshTs > staleMs && liked && !busy) {
       void refreshPlaylist();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liked]);
+  }, [resolved, liked]);
+
+  const searchAgain = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      applyResolution(await resolveManagedPlaylist(settings.name));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const useExisting = async (ref: string) => {
+    setBusy(true);
+    try {
+      const playlist = await adoptManagedPlaylist(ref);
+      setUnresolved(null);
+      setResolved(true);
+      setPlaylistUrl(playlist.url);
+      setStatus(`Now keeping "${playlist.name}" updated.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = async () => {
+    setBusy(true);
+    try {
+      const playlist = await createManagedPlaylist(settings.name);
+      // Force the auto-refresh below to fill the new (empty) playlist now.
+      update({ lastRefreshTs: 0 });
+      setUnresolved(null);
+      setResolved(true);
+      setPlaylistUrl(playlist.url);
+      setStatus(`Created "${playlist.name}".`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const oldestCovered = history.length > 0 ? history[history.length - 1].playedAt : null;
 
@@ -225,7 +319,7 @@ export default function PlaylistMaintainer() {
 
       {error && <p className="error">{error}</p>}
       {status && <p className="status">{status}</p>}
-      {playlistUrl && (
+      {playlistUrl && !unresolved && (
         <p>
           <a href={playlistUrl} target="_blank" rel="noreferrer">
             Open playlist in Spotify ↗
@@ -233,10 +327,127 @@ export default function PlaylistMaintainer() {
         </p>
       )}
 
-      <button className="btn btn-primary" onClick={() => void refreshPlaylist()} disabled={busy || !liked}>
-        {busy ? 'Updating…' : 'Refresh playlist now'}
-      </button>
+      {unresolved ? (
+        <PlaylistSetup
+          name={settings.name}
+          unresolved={unresolved}
+          busy={busy}
+          onUse={useExisting}
+          onCreate={create}
+          onSearchAgain={() => void searchAgain()}
+        />
+      ) : (
+        <button className="btn btn-primary" onClick={() => void refreshPlaylist()} disabled={busy || !liked}>
+          {busy ? 'Working…' : 'Refresh playlist now'}
+        </button>
+      )}
     </section>
+  );
+}
+
+function PlaylistSetup({
+  name,
+  unresolved,
+  busy,
+  onUse,
+  onCreate,
+  onSearchAgain,
+}: {
+  name: string;
+  unresolved: Unresolved;
+  busy: boolean;
+  onUse: (ref: string) => Promise<void>;
+  onCreate: () => Promise<void>;
+  onSearchAgain: () => void;
+}) {
+  const [paste, setPaste] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Choosing and creating both fail with a message the user can act on (bad
+  // link, not the owner…), so they report here rather than as a general error.
+  const attempt = async (action: () => Promise<void>) => {
+    setActionError(null);
+    try {
+      await action();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const n = unresolved.candidates.length;
+  const heading =
+    unresolved.reason === 'ambiguous'
+      ? `Which "${name}" playlist should the app keep updated?`
+      : unresolved.reason === 'unmanaged'
+        ? 'Use an existing playlist, or create a new one?'
+        : `Couldn't find a "${name}" playlist.`;
+  const body =
+    unresolved.reason === 'ambiguous'
+      ? `This app created ${n} playlists with that name, probably leftovers from earlier duplicates. Pick the one to keep updated — the others can be deleted in Spotify.`
+      : unresolved.reason === 'unmanaged'
+        ? `You have ${n} playlist${n === 1 ? '' : 's'} with that name that this app didn't create. Using one replaces its contents on every refresh.`
+        : `Create one below. If you already have one, paste its Spotify link so the app updates that one instead of adding another. (The app finds its playlist by name through Spotify search, which only sees public playlists, so a private or renamed one has to be pasted.)`;
+
+  return (
+    <div className="setup-panel">
+      <h3>{heading}</h3>
+      <p>{body}</p>
+
+      {n > 0 && (
+        <ul className="candidate-list">
+          {unresolved.candidates.map((c) => (
+            <li key={c.id}>
+              <span>
+                {c.name} <span className="muted">· {c.trackTotal ?? '?'} tracks</span>
+              </span>
+              <div className="spacer" />
+              <a href={c.url} target="_blank" rel="noreferrer">
+                Open in Spotify ↗
+              </a>
+              <button className="btn" disabled={busy} onClick={() => void attempt(() => onUse(c.id))}>
+                Use this one
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* With several app-made playlists to choose from, creating another is
+          refused (that is how the duplicates arose), so it isn't offered. */}
+      {unresolved.reason !== 'ambiguous' && (
+        <>
+          <button className="btn btn-primary" disabled={busy} onClick={() => void attempt(onCreate)}>
+            {unresolved.reason === 'none' ? `Create "${name}"` : `Create a new "${name}"`}
+          </button>
+
+          <form
+            className="paste-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void attempt(() => onUse(paste));
+            }}
+          >
+            <input
+              type="text"
+              placeholder="…or paste a Spotify playlist link"
+              value={paste}
+              onChange={(e) => setPaste(e.target.value)}
+              disabled={busy}
+              aria-label="Spotify playlist link"
+            />
+            <button className="btn" type="submit" disabled={busy || !paste.trim()}>
+              Use that playlist
+            </button>
+          </form>
+        </>
+      )}
+
+      {actionError && <p className="error">{actionError}</p>}
+
+      <p className="muted hint">
+        Changed the name above? <button className="btn btn-ghost" disabled={busy} onClick={onSearchAgain}>Search again</button>
+      </p>
+    </div>
   );
 }
 
