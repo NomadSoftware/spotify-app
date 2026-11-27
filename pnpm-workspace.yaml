@@ -3,13 +3,15 @@ packages:
 
 # Which dependencies may run install (postinstall) scripts. pnpm 11 refuses
 # them by default — the supply-chain-attack vector the scan in .github
-# complements — so only what genuinely needs a binary at install time is
-# allowed:
-# - workerd: wrangler's local runtime binary, fetched by its postinstall
-# - esbuild: platform-binary validator in the vite build chain
+# complements. Verified live (2026-11-27): a from-scratch install with both
+# scripts disabled passes the tests and the vite build — esbuild resolves its
+# platform binary through optionalDependencies (no script needed), and
+# workerd's binary is only fetched for `wrangler dev`, which this app never
+# uses (deploys are assets-only via CI). Kept as explicit `false` entries so a
+# future version re-adding a script doesn't silently start executing.
 allowBuilds:
-  workerd: true
-  esbuild: true
+  workerd: false
+  esbuild: false
 
 # pnpm 11 defaults to a 24h supply-chain cooldown before it'll install a
 # newly-published package version — a defense against attacks where a
