@@ -1,0 +1,62 @@
+# Runs the checks on every PR and every push to main.
+#
+# This exists because for a long time nothing did. The suite is real (40+
+# tests over the pure logic in src/lib) and `npm run build` runs tsc before
+# Vite, but both only ever ran on whoever's laptop happened to run them.
+# Small fixes go straight to main here without a PR, so a broken commit's
+# first automated reader was Cloudflare's deploy build — which fails *after*
+# the push, reports in a different dashboard, and says nothing at all about
+# a test that broke without breaking the build.
+#
+# Deliberately a separate workflow from the supply-chain scan alongside it
+# in this directory: that one is scoped to dependency-manifest changes and
+# runs on a weekly schedule, while this has to run on every push. Merging
+# them would mean either scanning on unrelated pushes or skipping the tests
+# on dependency-only ones.
+#
+# That scan is also why this comment describes it rather than naming its
+# file. The detector greps every *other* workflow for its own project name
+# and fails the build on a match, reading any mention as a sign the workflow
+# was planted to exfiltrate to an attacker repo. Naming the file here is
+# enough to trip it.
+#
+# Does not gate deploys. Cloudflare's Workers Builds starts from the same
+# pushes regardless; this is a signal for a human, and branch protection to
+# enforce it is a repo-settings decision rather than something this file can
+# make.
+name: CI
+
+on:
+  pull_request:
+    branches: ['**']
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Read-only: this job reports, it never writes back to the repo.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+
+      # npm ci is npm's frozen-lockfile install: CI gets exactly what's
+      # committed. Without it, a lockfile that doesn't match package.json is
+      # silently repaired rather than reported, so CI would pass on a
+      # dependency set no one has actually committed.
+      - run: npm ci
+
+      # `npm run build` is `tsc --noEmit && vite build`, so this covers the
+      # type-check too. Running the real build rather than tsc alone also
+      # exercises the Vite pipeline a deploy depends on.
+      - run: npm run build
+
+      - run: npm test

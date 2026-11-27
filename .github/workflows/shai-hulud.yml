@@ -1,0 +1,107 @@
+# Scans the lockfile and repo state against the Shai-Hulud 2.0 / ChainDrop
+# compromise databases (gensecaihq maintain it; daily updates). Complements,
+# not replaces, the existing posture: npm surfaces dependency install scripts
+# for approval rather than running them silently (see the npm install-scripts
+# notices on install), which is the attack's main execution vector — this
+# catches the other half, a package already in the lockfile later being added
+# to the blocklist.
+#
+# Scheduled weekly rather than only on push, because the useful case for a
+# rarely-changing lockfile is a *newly listed* package appearing in it without
+# any code change. ~30s a run; negligible against the 2,000 free monthly
+# minutes a private repo gets on a free plan.
+name: Shai-Hulud security check
+
+on:
+  # PRs: gate the merge — a dependency bump lands only if the scan passes.
+  pull_request:
+    branches: ['**']
+    paths:
+      - package.json
+      - package-lock.json
+      # Workflow files are scanned too, not just dependencies — one of this
+      # scan's checks is for planted workflows that exfiltrate to an
+      # attacker-controlled repo. Without this path, a PR that added such a
+      # workflow and touched no manifest would not be scanned on the PR at
+      # all, which is the one case where catching it before merge matters
+      # most. (Found the gap the other way round: a new workflow here was
+      # scanned only because the same PR happened to change package.json.)
+      - .github/workflows/**
+  # Push: still scanned, since small fixes go straight to main without a PR.
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 4 * * 1' # Mondays, off the :00 mark
+  workflow_dispatch:
+
+jobs:
+  security-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Least privilege: the scan needs to read the repo, the comment step needs
+    # to write to PRs. Nothing else. (The default token permissions would
+    # probably work too, but "probably" depends on repo settings.)
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: gensecaihq/Shai-Hulud-2.0-Detector@v2
+      # Runs on success as well as failure, unlike the original version, which
+      # only ever ADDED a comment. A PR that failed once and then passed kept
+      # a permanent "Attack Detected" banner sitting above a row of green
+      # checks, and every further failing run stacked another copy on top.
+      # Neither could be cleared without deleting comments by hand. This keeps
+      # exactly one marker-tagged comment: created or updated while the scan
+      # is failing, deleted once it passes, so the PR only ever says what is
+      # currently true.
+      #
+      # Only PR runs have an issue to comment on — on push/schedule/dispatch,
+      # context.issue.number doesn't exist and the call would just error.
+      - name: Report the scan result on the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        env:
+          SCAN_FAILED: ${{ job.status == 'failure' }}
+        with:
+          script: |
+            // Found by a hidden marker rather than by matching the body text,
+            // so rewording the alert can never orphan the comment it is meant
+            // to replace. The marker deliberately avoids this scanner's own
+            // project name: it greps every other workflow for that name and
+            // fails the build on a match.
+            const MARKER = '<!-- supply-chain-scan-alert -->'
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+            })
+            const existing = comments.find((c) => c.user.type === 'Bot' && c.body.includes(MARKER))
+
+            if (process.env.SCAN_FAILED !== 'true') {
+              if (existing) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id })
+              }
+              return
+            }
+
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+            const body = [
+              MARKER,
+              '## ⚠️ Security alert: the supply-chain scan failed',
+              '',
+              `Something in this PR matched the compromise database. **Read the [run log](${runUrl}) before merging** — it names what matched.`,
+              '',
+              'Note that a match is not automatically a compromised package: the scan also flags any workflow file that mentions it by name, which is a false positive. The log distinguishes the two.',
+              '',
+              'This comment is removed automatically once the scan passes.',
+            ].join('\n')
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, issue_number, body })
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body })
+            }

@@ -1,0 +1,19 @@
+# Weekly dependency updates. See
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/" # Location of package manifests
+    schedule:
+      interval: "weekly"
+
+  # The actions pinned in .github/workflows/*.yml are dependencies too, and
+  # were the one set nothing was watching — a pinned major goes stale silently
+  # until a runner drops support for it and a workflow starts failing for
+  # reasons that have nothing to do with the commit that triggered it.
+  # Security fixes to an action are also invisible from here otherwise.
+  - package-ecosystem: "github-actions"
+    directory: "/" # covers .github/workflows/ — the whole repo is one "directory" to this ecosystem
+    schedule:
+      interval: "weekly"
