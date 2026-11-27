@@ -1,0 +1,21 @@
+packages:
+  - '.'
+
+# Which dependencies may run install (postinstall) scripts. pnpm 11 refuses
+# them by default — the supply-chain-attack vector the scan in .github
+# complements — so only what genuinely needs a binary at install time is
+# allowed:
+# - workerd: wrangler's local runtime binary, fetched by its postinstall
+# - esbuild: platform-binary validator in the vite build chain
+allowBuilds:
+  workerd: true
+  esbuild: true
+
+# pnpm 11 defaults to a 24h supply-chain cooldown before it'll install a
+# newly-published package version — a defense against attacks where a
+# compromised version gets consumed within minutes of publishing. Disabled
+# here rather than tuned to a shorter window: every dependency bump in this
+# repo already goes through CI (tests + build + the supply-chain scan) before
+# merge, which is the actual safeguard, and a blanket 24h delay would
+# otherwise block that same day's fix on an already-vetted version.
+minimumReleaseAge: 0

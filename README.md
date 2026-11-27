@@ -33,14 +33,15 @@ Authorization Code + PKCE.
    # edit .env.local → VITE_SPOTIFY_CLIENT_ID=...
    ```
 
-4. **Run** (Node 26 LTS):
+4. **Run** (Node 26 LTS, pnpm 11 — the version is pinned in `packageManager`
+   and CI uses it automatically; `npm i -g pnpm` if you don't have it):
 
    ```bash
-   npm install
-   npm run dev        # http://127.0.0.1:5173 (use 127.0.0.1, not localhost)
-   npm test           # unit tests for the pure logic
-   npm run build      # typecheck + static build in dist/
-   npm run deploy     # build + deploy dist/ to Cloudflare Workers (wrangler)
+   pnpm install
+   pnpm dev           # http://127.0.0.1:5173 (use 127.0.0.1, not localhost)
+   pnpm test          # unit tests for the pure logic
+   pnpm build         # typecheck + static build in dist/
+   pnpm run deploy    # build + deploy dist/ to Cloudflare Workers (wrangler)
    ```
 
 Open **http://127.0.0.1:5173** (Spotify deprecated `localhost` redirect URIs) and log in.
@@ -50,8 +51,10 @@ Open **http://127.0.0.1:5173** (Spotify deprecated `localhost` redirect URIs) an
 Deployment target is Cloudflare Workers static assets (`wrangler.jsonc`, with
 `not_found_handling: "single-page-application"` so Spotify's `/callback`
 redirect serves the app). First deploy: `npx wrangler login`, then
-`npm run deploy` → live at `https://spotify-app.<account>.workers.dev`.
+`pnpm run deploy` → live at `https://spotify-app.<account>.workers.dev`.
 Bind a custom subdomain in the Cloudflare dashboard if you prefer.
+(`pnpm run deploy`, not bare `pnpm deploy` — pnpm has a built-in `deploy`
+command for workspaces.)
 
 For any non-local origin you must also register its redirect URI
 (`https://<host>/callback`) in the

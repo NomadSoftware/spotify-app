@@ -1,7 +1,7 @@
 # Runs the checks on every PR and every push to main.
 #
-# This exists because for a long time nothing did. The suite is real (40+
-# tests over the pure logic in src/lib) and `npm run build` runs tsc before
+# This exists because for a long time nothing did. The suite is real (41
+# tests over the pure logic in src/lib) and `pnpm build` runs tsc before
 # Vite, but both only ever ran on whoever's laptop happened to run them.
 # Small fixes go straight to main here without a PR, so a broken commit's
 # first automated reader was Cloudflare's deploy build — which fails *after*
@@ -18,7 +18,8 @@
 # file. The detector greps every *other* workflow for its own project name
 # and fails the build on a match, reading any mention as a sign the workflow
 # was planted to exfiltrate to an attacker repo. Naming the file here is
-# enough to trip it.
+# enough to trip it — verified, it failed exactly this way once over in
+# TheFretboardApp.
 #
 # Does not gate deploys. Cloudflare's Workers Builds starts from the same
 # pushes regardless; this is a signal for a human, and branch protection to
@@ -43,20 +44,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # No `version:` — action-setup reads package.json's `packageManager`
+      # field, which is already pinned (pnpm@11.24.0, matching the global
+      # install). Naming a version here too would be a second place to
+      # update, and the two silently disagreeing is the whole failure mode
+      # pinning was meant to remove.
+      - uses: pnpm/action-setup@v6
+
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-          cache: npm
+          cache: pnpm
 
-      # npm ci is npm's frozen-lockfile install: CI gets exactly what's
-      # committed. Without it, a lockfile that doesn't match package.json is
-      # silently repaired rather than reported, so CI would pass on a
-      # dependency set no one has actually committed.
-      - run: npm ci
+      # --frozen-lockfile: CI must install exactly what's committed. Without
+      # it, a lockfile that doesn't match package.json is silently repaired
+      # rather than reported, so CI would pass on a dependency set no one has
+      # actually committed.
+      - run: pnpm install --frozen-lockfile
 
-      # `npm run build` is `tsc --noEmit && vite build`, so this covers the
-      # type-check too. Running the real build rather than tsc alone also
+      # `pnpm build` is `tsc --noEmit && vite build`, so this covers the
+      # type-check too. Running the real build rather than `tsc` alone also
       # exercises the Vite pipeline a deploy depends on.
-      - run: npm run build
+      - run: pnpm build
 
-      - run: npm test
+      - run: pnpm test

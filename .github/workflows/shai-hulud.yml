@@ -1,10 +1,9 @@
 # Scans the lockfile and repo state against the Shai-Hulud 2.0 / ChainDrop
 # compromise databases (gensecaihq maintain it; daily updates). Complements,
-# not replaces, the existing posture: npm surfaces dependency install scripts
-# for approval rather than running them silently (see the npm install-scripts
-# notices on install), which is the attack's main execution vector — this
-# catches the other half, a package already in the lockfile later being added
-# to the blocklist.
+# not replaces, the existing posture: pnpm 11 already refuses to run any
+# dependency install scripts (see pnpm-workspace.yaml's allowBuilds), which is
+# the attack's main execution vector — this catches the other half, a package
+# already in the lockfile later being added to the blocklist.
 #
 # Scheduled weekly rather than only on push, because the useful case for a
 # rarely-changing lockfile is a *newly listed* package appearing in it without
@@ -18,7 +17,8 @@ on:
     branches: ['**']
     paths:
       - package.json
-      - package-lock.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       # Workflow files are scanned too, not just dependencies — one of this
       # scan's checks is for planted workflows that exfiltrate to an
       # attacker-controlled repo. Without this path, a PR that added such a

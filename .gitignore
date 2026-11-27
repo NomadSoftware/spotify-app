@@ -4,3 +4,8 @@ dist
 .env.*.local
 *.log
 .zcode
+
+# This repo is pnpm-managed — a stray npm lockfile would drift the tree
+package-lock.json
+
+pnpm-debug.log*
